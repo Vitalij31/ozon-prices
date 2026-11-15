@@ -33,6 +33,7 @@ object Fetcher {
 (function(){
  var r={title:'',price:0,card:0,raw:''};
  function num(s){ if(s==null) return 0; var n=parseInt(String(s).replace(/[^\d]/g,'')); return isNaN(n)?0:n; }
+ var NR='(\\d{1,3}(?:[\\s\\u00a0\\u2009]?\\d{3})*)';
  try{
   var ld=0;
   var s=document.querySelectorAll('script[type="application/ld+json"]');
@@ -56,7 +57,7 @@ object Fetcher {
   }
   var w=document.querySelector('[data-widget="webPrice"]');
   var sd=document.querySelector('[id^="state-webPrice"]');
-  var ds='', t='', st=0, cd=0, tp=0, tc=0;
+  var ds='', t='', st=0, cd=0, tp=0, tc=0, bc=0, bo=0;
   if(sd) ds=sd.getAttribute('data-state')||'';
   if(!ds && w){ var inn=w.querySelector('[data-state]'); if(inn) ds=inn.getAttribute('data-state')||''; }
   if(ds){ try{ var d=JSON.parse(ds); st=num(d.price); cd=num(d.cardPrice); }catch(e){} }
@@ -76,13 +77,24 @@ object Fetcher {
    if(ci>=0) tc=list[ci].v;
    for(var z=0;z<list.length;z++){ if(z!==ci){ tp=list[z].v; break; } }
   }
-  var price=st||tp||ld, card=cd||tc;
+  // Поиск по тексту всей страницы: «2 558 ₽ С банками» и «2 693 ₽ С другими банками»
+  var bt=(document.body&&document.body.innerText)||'';
+  var m1=new RegExp(NR+'\\s*₽\\s*(?:С\\s*банками|с\\s*Ozon\\s*Картой|по\\s*Ozon\\s*Карте)','i').exec(bt);
+  if(m1) bc=num(m1[1]);
+  var m2=new RegExp(NR+'\\s*₽\\s*С\\s*другими\\s*банками','i').exec(bt);
+  if(m2) bo=num(m2[1]);
+  var price=st||bo||tp||ld, card=cd||bc||tc;
   if(!price&&card) price=card;
   if(card&&price&&card>price){ var x=card; card=price; price=x; }
   r.price=price; r.card=card;
-  var raw=['ld='+ld];
+  var raw=['ld='+ld,'found: card='+card+' regular='+price,'body='+bt.length];
   if(ds) raw.push('state='+ds.substring(0,220));
-  if(t) raw.push('text='+t.replace(/\s+/g,' ').substring(0,200));
+  if(t) raw.push('widget='+t.replace(/\s+/g,' ').substring(0,200));
+  var sn=[], ix=-1, cnt=0;
+  while(cnt<5){ ix=bt.indexOf('₽',ix+1); if(ix<0) break; sn.push(bt.substring(Math.max(0,ix-12),ix+28).replace(/\s+/g,' ')); cnt++; }
+  if(sn.length) raw.push('rub='+sn.join(' // '));
+  var bk=bt.search(/банк/i);
+  if(bk>=0) raw.push('bank='+bt.substring(Math.max(0,bk-30),bk+60).replace(/\s+/g,' '));
   r.raw=raw.join(' | ');
  }catch(e){ r.raw='js error: '+e; }
  return JSON.stringify(r);
@@ -125,7 +137,7 @@ object Fetcher {
                     if (f != null) last = f
                     attempts++
                     // Ждём немного дольше, чтобы блок с ценой по карте успел прогрузиться
-                    if (f != null && f.price > 0 && (f.card > 0 || attempts >= 5)) finish(f)
+                    if (f != null && f.price > 0 && (f.card > 0 || attempts >= 8)) finish(f)
                     else if (attempts >= 14) finish(last)
                     else handler.postDelayed({ poll() }, 1500)
                 }

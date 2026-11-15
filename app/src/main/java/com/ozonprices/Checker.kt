@@ -96,7 +96,7 @@ object Checker {
         val dropped = prev > 0 && cur < prev
         val reached = p.target > 0 && cur <= p.target && (prev == 0.0 || prev > p.target || dropped)
         if (dropped || reached) {
-            val kind = if (useCard && r.card > 0) " (по карте)" else ""
+            val kind = if (useCard && r.card > 0) " (с банками-партнёрами)" else ""
             val text = buildString {
                 if (dropped) append("Цена снизилась: ${money(prev)} → ${money(cur)}$kind.")
                 if (reached) append(" Достигнута целевая цена ${money(p.target)}.")
