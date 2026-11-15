@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -53,19 +54,7 @@ class MainActivity : ComponentActivity() {
         Store.init(this)
         Scheduler.schedule(this, Store.intervalHours, false)
         if (Build.VERSION.SDK_INT >= 33) permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        if (savedInstanceState == null) handle(intent)
         setContent { MaterialTheme { App() } }
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        handle(intent)
-    }
-
-    private fun handle(i: Intent?) {
-        if (i?.action != Intent.ACTION_SEND) return
-        val text = i.getStringExtra(Intent.EXTRA_TEXT) ?: return
-        Toast.makeText(this, Store.addFromText(this, text), Toast.LENGTH_LONG).show()
     }
 }
 
@@ -87,7 +76,10 @@ fun App() {
     }
 }
 
-private fun prevPrice(p: Product): Double? = p.history.lastOrNull { it.p != p.price }?.p
+private fun prevPrice(p: Product, useCard: Boolean): Double? {
+    val cur = p.eff(useCard)
+    return p.history.lastOrNull { it.eff(useCard) != cur }?.eff(useCard)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -95,6 +87,7 @@ fun ListScreen(onOpen: (String) -> Unit, onSettings: () -> Unit) {
     val ctx = LocalContext.current
     val list by Store.products.collectAsState()
     val refreshing by Store.refreshing.collectAsState()
+    val useCard by Store.useCard.collectAsState()
     var showAdd by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -131,7 +124,7 @@ fun ListScreen(onOpen: (String) -> Unit, onSettings: () -> Unit) {
                     contentPadding = PaddingValues(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(list, key = { it.id }) { p -> ProductCard(p) { onOpen(p.id) } }
+                    items(list, key = { it.id }) { p -> ProductCard(p, useCard) { onOpen(p.id) } }
                 }
             }
         }
@@ -159,8 +152,16 @@ fun ListScreen(onOpen: (String) -> Unit, onSettings: () -> Unit) {
     }
 }
 
+private fun priceNote(p: Product, useCard: Boolean): String = when {
+    p.price <= 0 -> ""
+    p.card > 0 && useCard -> "с Ozon Картой · обычная ${money(p.price)}"
+    p.card > 0 -> "по Ozon Карте: ${money(p.card)}"
+    useCard -> "цена по Ozon Карте не найдена, показана обычная"
+    else -> ""
+}
+
 @Composable
-fun ProductCard(p: Product, onClick: () -> Unit) {
+fun ProductCard(p: Product, useCard: Boolean, onClick: () -> Unit) {
     Card(Modifier.fillMaxWidth().clickable { onClick() }) {
         Column(Modifier.padding(14.dp)) {
             Text(
@@ -170,10 +171,11 @@ fun ProductCard(p: Product, onClick: () -> Unit) {
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (p.price > 0) {
-                    Text(money(p.price), fontSize = 22.sp, style = MaterialTheme.typography.titleLarge)
-                    val prev = prevPrice(p)
+                    val eff = p.eff(useCard)
+                    Text(money(eff), fontSize = 22.sp, style = MaterialTheme.typography.titleLarge)
+                    val prev = prevPrice(p, useCard)
                     if (prev != null) {
-                        val d = p.price - prev
+                        val d = eff - prev
                         Spacer(Modifier.width(10.dp))
                         Text(
                             (if (d < 0) "↓ " else "↑ ") + money(kotlin.math.abs(d)),
@@ -184,6 +186,8 @@ fun ProductCard(p: Product, onClick: () -> Unit) {
                     Text(if (p.error.isNotBlank()) "Цена не получена" else "Проверяется…")
                 }
             }
+            val note = priceNote(p, useCard)
+            if (note.isNotEmpty()) Text(note, style = MaterialTheme.typography.bodySmall)
             if (p.target > 0) {
                 Text("Цель: ${money(p.target)}", style = MaterialTheme.typography.bodySmall)
             }
@@ -192,18 +196,18 @@ fun ProductCard(p: Product, onClick: () -> Unit) {
 }
 
 @Composable
-fun PriceChart(points: List<PricePoint>, modifier: Modifier = Modifier) {
+fun PriceChart(points: List<Pair<Long, Double>>, modifier: Modifier = Modifier) {
     val color = MaterialTheme.colorScheme.primary
     Canvas(modifier) {
         if (points.size < 2) return@Canvas
-        val min = points.minOf { it.p }
-        val max = points.maxOf { it.p }
-        val t0 = points.first().t
-        val dt = (points.last().t - t0).coerceAtLeast(1L)
+        val min = points.minOf { it.second }
+        val max = points.maxOf { it.second }
+        val t0 = points.first().first
+        val dt = (points.last().first - t0).coerceAtLeast(1L)
         val path = Path()
         points.forEachIndexed { i, pt ->
-            val x = (pt.t - t0).toFloat() / dt * size.width
-            val frac = if (max - min < 1e-9) 0.5f else ((pt.p - min) / (max - min)).toFloat()
+            val x = (pt.first - t0).toFloat() / dt * size.width
+            val frac = if (max - min < 1e-9) 0.5f else ((pt.second - min) / (max - min)).toFloat()
             val y = size.height * 0.9f - frac * size.height * 0.8f
             if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
             drawCircle(color, 4.dp.toPx(), Offset(x, y))
@@ -217,6 +221,7 @@ fun PriceChart(points: List<PricePoint>, modifier: Modifier = Modifier) {
 fun DetailScreen(id: String, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val list by Store.products.collectAsState()
+    val useCard by Store.useCard.collectAsState()
     val p = list.find { it.id == id }
     if (p == null) {
         LaunchedEffect(Unit) { onBack() }
@@ -226,6 +231,7 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
         mutableStateOf(if (p.target > 0) p.target.toLong().toString() else "")
     }
     val df = remember { SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()) }
+    val values = p.history.map { it.t to it.eff(useCard) }
 
     Scaffold(
         topBar = {
@@ -250,18 +256,20 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
         ) {
             Text(p.title.ifBlank { p.url }, style = MaterialTheme.typography.titleMedium)
             Text(
-                if (p.price > 0) money(p.price) else "—",
+                if (p.price > 0) money(p.eff(useCard)) else "—",
                 style = MaterialTheme.typography.headlineLarge
             )
+            val note = priceNote(p, useCard)
+            if (note.isNotEmpty()) Text(note, style = MaterialTheme.typography.bodyMedium)
             if (p.checked > 0) {
                 Text("Проверено: ${df.format(Date(p.checked))}", style = MaterialTheme.typography.bodySmall)
             }
             if (p.error.isNotBlank()) Text(p.error, color = Red)
 
-            if (p.history.size >= 2) {
-                PriceChart(p.history, Modifier.fillMaxWidth().height(180.dp))
+            if (values.size >= 2) {
+                PriceChart(values, Modifier.fillMaxWidth().height(180.dp))
                 Text(
-                    "Минимум: ${money(p.history.minOf { it.p })}   Максимум: ${money(p.history.maxOf { it.p })}",
+                    "Минимум: ${money(values.minOf { it.second })}   Максимум: ${money(values.maxOf { it.second })}",
                     style = MaterialTheme.typography.bodySmall
                 )
             } else {
@@ -284,6 +292,11 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
             OutlinedButton(onClick = {
                 ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(p.url)))
             }) { Text("Открыть на Ozon") }
+
+            if (p.raw.isNotBlank()) {
+                Text("Что увидело приложение на странице:", style = MaterialTheme.typography.labelMedium)
+                SelectionContainer { Text(p.raw, style = MaterialTheme.typography.bodySmall) }
+            }
         }
     }
 }
@@ -292,6 +305,7 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
     val ctx = LocalContext.current
+    val useCard by Store.useCard.collectAsState()
     var hours by remember { mutableIntStateOf(Store.intervalHours) }
     Scaffold(
         topBar = {
@@ -305,7 +319,21 @@ fun SettingsScreen(onBack: () -> Unit) {
             )
         }
     ) { pad ->
-        Column(Modifier.padding(pad).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(
+            Modifier.padding(pad).padding(16.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Цена с Ozon Картой", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Включено: отслеживаем цену по карте (она ниже). Выключено: обычную цену.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Switch(checked = useCard, onCheckedChange = { Store.setUseCard(it) })
+            }
+
             Text("Как часто проверять цены", style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(1, 3, 6, 12, 24).forEach { h ->

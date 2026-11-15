@@ -6,26 +6,35 @@ import android.os.Handler
 import android.os.Looper
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import org.json.JSONTokener
+import java.io.ByteArrayInputStream
 import kotlin.coroutines.resume
 
-data class Fetched(val title: String, val price: Double)
+data class Fetched(val title: String, val price: Double, val card: Double, val raw: String)
 
-/** Загружает страницу товара в скрытом WebView и достаёт название и цену. Вызывать на главном потоке. */
+/** Загружает страницу товара в скрытом WebView и достаёт название, обычную цену и цену с Ozon Картой. */
 object Fetcher {
     private const val UA =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) " +
             "Chrome/124.0.0.0 Mobile Safari/537.36"
 
+    private val BLOCK_EXT = listOf(
+        ".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".avif", ".mp4", ".webm", ".woff", ".woff2", ".ttf"
+    )
+    private val BLOCK_HOST = listOf("mc.yandex", "googletagmanager", "google-analytics", "doubleclick")
+
     private val JS = """
 (function(){
- var r={title:'',price:0};
+ var r={title:'',price:0,card:0,raw:''};
+ function num(s){ if(s==null) return 0; var n=parseInt(String(s).replace(/[^\d]/g,'')); return isNaN(n)?0:n; }
  try{
+  var ld=0;
   var s=document.querySelectorAll('script[type="application/ld+json"]');
   for(var i=0;i<s.length;i++){
    try{
@@ -36,23 +45,40 @@ object Fetcher {
      if(o&&o['@type']=='Product'){
       r.title=o.name||'';
       var of=o.offers;
-      if(of){ if(Array.isArray(of)) of=of[0]; r.price=parseFloat(of.price||of.lowPrice||0)||0; }
+      if(of){ if(Array.isArray(of)) of=of[0]; ld=parseFloat(of.price||of.lowPrice||0)||0; }
      }
     }
    }catch(e){}
   }
   if(!r.title){
-   var m=document.querySelector('meta[property="og:title"]');
-   r.title=m?m.content:document.title;
+   var m0=document.querySelector('meta[property="og:title"]');
+   r.title=m0?m0.content:document.title;
   }
-  if(!r.price){
-   var w=document.querySelector('[data-widget="webPrice"]');
-   if(w){
-    var mm=w.innerText.match(/(\d[\d\s\u00a0\u2009]*)\s*₽/);
-    if(mm) r.price=parseInt(mm[1].replace(/\D/g,''))||0;
-   }
+  var w=document.querySelector('[data-widget="webPrice"]');
+  var sd=document.querySelector('[id^="state-webPrice"]');
+  var ds='', t='', st=0, cd=0, tp=0, tc=0;
+  if(sd) ds=sd.getAttribute('data-state')||'';
+  if(!ds && w){ var inn=w.querySelector('[data-state]'); if(inn) ds=inn.getAttribute('data-state')||''; }
+  if(ds){ try{ var d=JSON.parse(ds); st=num(d.price); cd=num(d.cardPrice); }catch(e){} }
+  if(w) t=w.innerText||'';
+  if(t){
+   var re=/(\d[\d\s\u00a0\u2009]*)\s*₽/g, m, list=[];
+   while((m=re.exec(t))){ var v=num(m[1]); if(v>0) list.push({v:v,s:m.index,e:re.lastIndex}); }
+   var ci=-1;
+   for(var q=0;q<list.length;q++){ if(/Ozon\s*Карт/i.test(t.substr(list[q].e,30))){ ci=q; break; } }
+   if(ci<0 && list.length && /Ozon\s*Карт/i.test(t.substring(0,list[0].s))) ci=0;
+   if(ci>=0) tc=list[ci].v;
+   for(var z=0;z<list.length;z++){ if(z!==ci){ tp=list[z].v; break; } }
   }
- }catch(e){}
+  var price=st||tp||ld, card=cd||tc;
+  if(!price&&card) price=card;
+  if(card&&price&&card>price){ var x=card; card=price; price=x; }
+  r.price=price; r.card=card;
+  var raw=['ld='+ld];
+  if(ds) raw.push('state='+ds.substring(0,220));
+  if(t) raw.push('text='+t.replace(/\s+/g,' ').substring(0,200));
+  r.raw=raw.join(' | ');
+ }catch(e){ r.raw='js error: '+e; }
  return JSON.stringify(r);
 })()
 """
@@ -62,14 +88,14 @@ object Fetcher {
         return try {
             val s = JSONTokener(raw).nextValue() as? String ?: return null
             val o = JSONObject(s)
-            Fetched(o.optString("title"), o.optDouble("price", 0.0))
+            Fetched(o.optString("title"), o.optDouble("price", 0.0), o.optDouble("card", 0.0), o.optString("raw"))
         } catch (e: Exception) {
             null
         }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    suspend fun fetch(ctx: Context, url: String): Fetched? = withTimeoutOrNull(50_000L) {
+    suspend fun fetch(ctx: Context, url: String): Fetched? = withTimeoutOrNull(45_000L) {
         suspendCancellableCoroutine<Fetched?> { cont ->
             val handler = Handler(Looper.getMainLooper())
             val wv = WebView(ctx.applicationContext)
@@ -82,7 +108,7 @@ object Fetcher {
                 if (done) return
                 done = true
                 handler.removeCallbacksAndMessages(null)
-                runCatching { wv.stopLoading(); wv.destroy() }
+                runCatching { wv.stopLoading(); wv.onPause(); wv.loadUrl("about:blank"); wv.destroy() }
                 if (cont.isActive) cont.resume(r)
             }
 
@@ -92,8 +118,9 @@ object Fetcher {
                     val f = parse(raw)
                     if (f != null) last = f
                     attempts++
-                    if (f != null && f.price > 0) finish(f)
-                    else if (attempts >= 16) finish(last)
+                    // Ждём немного дольше, чтобы блок с ценой по карте успел прогрузиться
+                    if (f != null && f.price > 0 && (f.card > 0 || attempts >= 5)) finish(f)
+                    else if (attempts >= 14) finish(last)
                     else handler.postDelayed({ poll() }, 1500)
                 }
             }
@@ -118,6 +145,17 @@ object Fetcher {
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                     val scheme = request?.url?.scheme
                     return scheme != "http" && scheme != "https"
+                }
+
+                // Не грузим картинки, шрифты, видео и трекеры: меньше нагрузка на телефон и трафик
+                override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                    val req = request ?: return null
+                    val path = req.url.path?.lowercase() ?: ""
+                    val host = req.url.host?.lowercase() ?: ""
+                    if (BLOCK_EXT.any { path.endsWith(it) } || BLOCK_HOST.any { host.contains(it) }) {
+                        return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                    }
+                    return null
                 }
             }
             wv.loadUrl(url)
