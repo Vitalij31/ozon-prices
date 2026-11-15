@@ -65,8 +65,14 @@ object Fetcher {
    var re=/(\d[\d\s\u00a0\u2009]*)\s*₽/g, m, list=[];
    while((m=re.exec(t))){ var v=num(m[1]); if(v>0) list.push({v:v,s:m.index,e:re.lastIndex}); }
    var ci=-1;
-   for(var q=0;q<list.length;q++){ if(/Ozon\s*Карт/i.test(t.substr(list[q].e,30))){ ci=q; break; } }
-   if(ci<0 && list.length && /Ozon\s*Карт/i.test(t.substring(0,list[0].s))) ci=0;
+   var lm=/Ozon\s*Карт|банками[-\s]*партн|партн[её]р/i.exec(t);
+   if(lm && list.length){
+    var le=lm.index+lm[0].length, best=1e9;
+    for(var q=0;q<list.length;q++){
+     var dd=(lm.index>=list[q].e)?(lm.index-list[q].e):((list[q].s>=le)?(list[q].s-le+0.5):1e8);
+     if(dd<best){ best=dd; ci=q; }
+    }
+   }
    if(ci>=0) tc=list[ci].v;
    for(var z=0;z<list.length;z++){ if(z!==ci){ tp=list[z].v; break; } }
   }

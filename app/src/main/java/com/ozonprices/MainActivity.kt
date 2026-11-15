@@ -154,9 +154,9 @@ fun ListScreen(onOpen: (String) -> Unit, onSettings: () -> Unit) {
 
 private fun priceNote(p: Product, useCard: Boolean): String = when {
     p.price <= 0 -> ""
-    p.card > 0 && useCard -> "с Ozon Картой · обычная ${money(p.price)}"
-    p.card > 0 -> "по Ozon Карте: ${money(p.card)}"
-    useCard -> "цена по Ozon Карте не найдена, показана обычная"
+    p.card > 0 && useCard -> "по карте · обычная ${money(p.price)}"
+    p.card > 0 -> "по карте: ${money(p.card)}"
+    useCard -> "цена по карте не найдена, показана обычная"
     else -> ""
 }
 
@@ -325,7 +325,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Цена с Ozon Картой", style = MaterialTheme.typography.titleMedium)
+                    Text("Цена по карте (Ozon Банк и банки-партнёры)", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "Включено: отслеживаем цену по карте (она ниже). Выключено: обычную цену.",
                         style = MaterialTheme.typography.bodySmall
