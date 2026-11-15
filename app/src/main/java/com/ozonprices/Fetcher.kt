@@ -34,6 +34,18 @@ object Fetcher {
  var r={title:'',price:0,card:0,raw:''};
  function num(s){ if(s==null) return 0; var n=parseInt(String(s).replace(/[^\d]/g,'')); return isNaN(n)?0:n; }
  var NR='(\\d{1,3}(?:[\\s\\u00a0\\u2009]?\\d{3})*)';
+ function pnum(v){ if(typeof v==='number') return v; var s=String(v).trim(); if(/^\d+([.,]\d+)?$/.test(s)) return parseFloat(s.replace(',','.')); return num(s); }
+ function walk(o,f){ if(o&&typeof o==='object'){ for(var k in o){ f(k,o[k]); walk(o[k],f); } } }
+ try{
+  window.__oz=window.__oz||{};
+  if(!window.__oz.started && location.pathname.indexOf('/product')===0){
+   window.__oz.started=true;
+   fetch('/api/composer-api.bx/page/json/v2?url='+location.pathname,{credentials:'include'})
+    .then(function(x){return x.text();})
+    .then(function(x){window.__oz.text=x;})
+    .catch(function(e){window.__oz.err=String(e);});
+  }
+ }catch(e){}
  try{
   var ld=0;
   var s=document.querySelectorAll('script[type="application/ld+json"]');
@@ -83,11 +95,34 @@ object Fetcher {
   if(m1) bc=num(m1[1]);
   var m2=new RegExp(NR+'\\s*₽\\s*С\\s*другими\\s*банками','i').exec(bt);
   if(m2) bo=num(m2[1]);
-  var price=st||bo||tp||ld, card=cd||bc||tc;
+  var ac=0, ap=0, apiInfo='api=wait';
+  if(window.__oz){
+   if(window.__oz.err) apiInfo='api err='+window.__oz.err;
+   else if(window.__oz.text!=null){
+    try{
+     var J=JSON.parse(window.__oz.text), ws=J.widgetStates||{}, names=[], wp='';
+     for(var key in ws){
+      if(/rice|Sale/.test(key)) names.push(key);
+      if(/^webPrice-/.test(key)){
+       wp=wp||String(ws[key]);
+       var po=JSON.parse(ws[key]);
+       walk(po,function(kk,vv){
+        if(typeof vv==='string'||typeof vv==='number'){
+         if(kk==='cardPrice'&&!ac) ac=pnum(vv);
+         if(kk==='price'&&!ap) ap=pnum(vv);
+        }
+       });
+      }
+     }
+     apiInfo='api ok keys='+names.slice(0,8).join(',')+' webPrice='+wp.substring(0,300);
+    }catch(e){ apiInfo='api parse err='+e+' len='+window.__oz.text.length+' head='+window.__oz.text.substring(0,120); }
+   }
+  }
+  var price=ap||st||bo||tp||ld, card=ac||cd||bc||tc;
   if(!price&&card) price=card;
   if(card&&price&&card>price){ var x=card; card=price; price=x; }
   r.price=price; r.card=card;
-  var raw=['ld='+ld,'found: card='+card+' regular='+price,'body='+bt.length];
+  var raw=['ld='+ld,'found: card='+card+' regular='+price,'body='+bt.length,apiInfo];
   if(ds) raw.push('state='+ds.substring(0,220));
   if(t) raw.push('widget='+t.replace(/\s+/g,' ').substring(0,200));
   var sn=[], ix=-1, cnt=0;
