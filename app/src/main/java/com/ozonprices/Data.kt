@@ -29,7 +29,7 @@ data class Product(
 fun money(v: Double): String = String.format(Locale("ru", "RU"), "%,.0f ₽", v)
 
 fun effPrice(price: Double, card: Double, useCard: Boolean): Double =
-    if (useCard && card > 0) card else price
+    if (useCard && card > 0 && (price <= 0 || card >= price * 0.4)) card else price
 
 fun Product.eff(useCard: Boolean): Double = effPrice(price, card, useCard)
 fun PricePoint.eff(useCard: Boolean): Double = effPrice(p, c, useCard)

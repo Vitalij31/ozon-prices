@@ -91,8 +91,19 @@ object Fetcher {
   }
   // Поиск по тексту всей страницы: «2 558 ₽ С банками» и «2 693 ₽ С другими банками»
   var bt=(document.body&&document.body.innerText)||'';
-  var m1=new RegExp(NR+'\\s*₽\\s*(?:С\\s*банками|с\\s*Ozon\\s*Картой|по\\s*Ozon\\s*Карте)','i').exec(bt);
+  var m1=new RegExp(NR+'\\s*₽\\s*(?:с\\s*Ozon\\s*Картой|по\\s*Ozon\\s*Карте)','i').exec(bt);
   if(m1) bc=num(m1[1]);
+  // «2 558 ₽ Покупайте за 1 ₽ С банками»: берём ближайшую цену ПЕРЕД подписью, пропуская акции вида «за 1 ₽»
+  var lm2=/С\s*банками/i.exec(bt);
+  if(lm2){
+   var rr=new RegExp(NR+'\\s*₽','g'), mm, bp=0;
+   while((mm=rr.exec(bt))){
+    if(mm.index>=lm2.index) break;
+    if(/за\s*$/i.test(bt.substring(Math.max(0,mm.index-14),mm.index))) continue;
+    var vv=num(mm[1]); if(vv>0) bp=vv;
+   }
+   if(bp) bc=bp;
+  }
   var m2=new RegExp(NR+'\\s*₽\\s*С\\s*другими\\s*банками','i').exec(bt);
   if(m2) bo=num(m2[1]);
   var ac=0, ap=0, apiInfo='api=wait';
@@ -118,9 +129,10 @@ object Fetcher {
     }catch(e){ apiInfo='api parse err='+e+' len='+window.__oz.text.length+' head='+window.__oz.text.substring(0,120); }
    }
   }
-  var price=ap||st||bo||tp||ld, card=ac||cd||bc||tc;
+  var price=st||bo||tp||ld||ap, card=cd||bc||tc||ac;
   if(!price&&card) price=card;
   if(card&&price&&card>price){ var x=card; card=price; price=x; }
+  if(card&&price&&card<price*0.4) card=0;
   r.price=price; r.card=card;
   var raw=['ld='+ld,'found: card='+card+' regular='+price,'body='+bt.length,apiInfo];
   if(ds) raw.push('state='+ds.substring(0,220));
