@@ -5,6 +5,10 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.annotation.SuppressLint
+import android.webkit.CookieManager
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -38,6 +42,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -64,9 +69,13 @@ fun App() {
     var selected by remember { mutableStateOf<String?>(null) }
     val sel = selected
     when {
+        screen == "login" -> {
+            BackHandler { screen = "settings" }
+            LoginScreen { screen = "settings" }
+        }
         screen == "settings" -> {
             BackHandler { screen = "list" }
-            SettingsScreen { screen = "list" }
+            SettingsScreen(onBack = { screen = "list" }, onLogin = { screen = "login" })
         }
         sel != null -> {
             BackHandler { selected = null }
@@ -303,7 +312,7 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onLogin: () -> Unit) {
     val ctx = LocalContext.current
     val useCard by Store.useCard.collectAsState()
     var hours by remember { mutableIntStateOf(Store.intervalHours) }
@@ -348,6 +357,20 @@ fun SettingsScreen(onBack: () -> Unit) {
                     )
                 }
             }
+            Text("Аккаунт Ozon (необязательно)", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Без входа приложение видит публичные цены, как гость на сайте. Если в вашем аккаунте цены " +
+                    "отличаются (персональные скидки, купоны), войдите: вход происходит на сайте Ozon, " +
+                    "пароль и код из SMS приложению не передаются, сохраняется только сессия браузера.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Button(onClick = onLogin) { Text("Войти в Ozon") }
+            OutlinedButton(onClick = {
+                CookieManager.getInstance().removeAllCookies(null)
+                CookieManager.getInstance().flush()
+                Toast.makeText(ctx, "Данные входа удалены", Toast.LENGTH_SHORT).show()
+            }) { Text("Выйти и очистить данные Ozon") }
+
             OutlinedButton(onClick = {
                 Notifier.notify(ctx, 1, "Тестовое уведомление", "Уведомления работают.")
             }) { Text("Проверить уведомления") }
@@ -358,5 +381,42 @@ fun SettingsScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall
             )
         }
+    }
+}
+
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun LoginScreen(onDone: () -> Unit) {
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Войдите в аккаунт Ozon, затем нажмите «Готово»",
+                Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Button(onClick = {
+                CookieManager.getInstance().flush()
+                onDone()
+            }) { Text("Готово") }
+        }
+        AndroidView(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.userAgentString = Fetcher.UA
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                    webViewClient = WebViewClient()
+                    loadUrl("https://www.ozon.ru/")
+                }
+            },
+            onRelease = { it.destroy() }
+        )
     }
 }

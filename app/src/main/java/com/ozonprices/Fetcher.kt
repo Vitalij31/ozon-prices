@@ -20,7 +20,7 @@ data class Fetched(val title: String, val price: Double, val card: Double, val r
 
 /** Загружает страницу товара в скрытом WebView и достаёт название, обычную цену и цену с Ozon Картой. */
 object Fetcher {
-    private const val UA =
+    const val UA =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) " +
             "Chrome/124.0.0.0 Mobile Safari/537.36"
 
@@ -93,16 +93,15 @@ object Fetcher {
   var bt=(document.body&&document.body.innerText)||'';
   var m1=new RegExp(NR+'\\s*₽\\s*(?:с\\s*Ozon\\s*Картой|по\\s*Ozon\\s*Карте)','i').exec(bt);
   if(m1) bc=num(m1[1]);
-  // «2 558 ₽ Покупайте за 1 ₽ С банками»: берём ближайшую цену ПЕРЕД подписью, пропуская акции вида «за 1 ₽»
+  // Цена по карте = ПЕРВАЯ цена в блоке прямо перед подписью «С банками»:
+  // «643 ₽ 1 037 ₽ 1 037 ₽ −37% С банками» (дальше идут зачёркнутые цены и скидка),
+  // «2 558 ₽ Покупайте за 1 ₽ С банками» (акции вида «за 1 ₽» отбрасываем)
   var lm2=/С\s*банками/i.exec(bt);
   if(lm2){
-   var rr=new RegExp(NR+'\\s*₽','g'), mm, bp=0;
-   while((mm=rr.exec(bt))){
-    if(mm.index>=lm2.index) break;
-    if(/за\s*$/i.test(bt.substring(Math.max(0,mm.index-14),mm.index))) continue;
-    var vv=num(mm[1]); if(vv>0) bp=vv;
-   }
-   if(bp) bc=bp;
+   var seg=bt.substring(0,lm2.index).replace(/за\s*\d[\d\s\u00a0\u2009]*\s*₽/gi,' ');
+   var runRe=new RegExp('(?:\\s*(?:'+NR+'\\s*₽|[−\\-–]\\s*\\d+\\s*%))+','g'), rm, lastRun='';
+   while((rm=runRe.exec(seg))){ if(/₽/.test(rm[0]) && rm.index+rm[0].length>=seg.length-60) lastRun=rm[0]; }
+   if(lastRun){ var pm=new RegExp(NR+'\\s*₽').exec(lastRun); if(pm) bc=num(pm[1]); }
   }
   var m2=new RegExp(NR+'\\s*₽\\s*С\\s*другими\\s*банками','i').exec(bt);
   if(m2) bo=num(m2[1]);
